@@ -2,6 +2,8 @@
 
 北京工业大学耿丹学院 2027 届本科毕业设计（论文）LaTeX 源码与 PDF 文稿。
 
+仓库地址：<https://github.com/Mrxy-liu/campus-qa-thesis>
+
 | 项目 | 内容 |
 |---|---|
 | 学生 | 刘奇 |
