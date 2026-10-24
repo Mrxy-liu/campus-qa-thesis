@@ -1,0 +1,292 @@
+\chapter{系统设计}
+\label{chap:design}
+
+本章在第~\ref{chap:requirement} 章需求分析的基础上，给出系统的总体设计和详细设计。首先说明分层架构和模块划分，然后依次设计知识库与数据处理流程、检索增强问答流程、数据库与接口、权限与安全，最后给出关键参数和异常处理策略。设计遵循“高内聚、低耦合、可替换、可追溯”的原则，尽量把与具体模型服务相关的部分隔离在接口层之后。
+
+\section{总体架构设计}
+\label{sec:architecture}
+
+系统采用前后端分离的分层架构，自上而下分为表现层、接口层、业务层、数据与模型层，另设贯穿各层的安全与运维支撑。总体架构如图~\ref{fig:architecture} 所示。
+
+\begin{figure}[H]
+  \centering
+  \begin{tikzpicture}[
+    comp/.style={draw, rounded corners=2pt, minimum height=0.65cm, align=center, fill=white, inner sep=3pt, font=\zihao{5}}
+  ]
+    \def\W{13.4}
+    % 表现层
+    \draw[fill=gray!5] (0,0) rectangle (\W,-1.3);
+    \node[anchor=west, font=\heiti\zihao{6}] at (0.15,-0.65) {表现层};
+    \node[comp, minimum width=2.9cm] at (3.5,-0.65) {学生端（Vue 3）};
+    \node[comp, minimum width=4.0cm] at (7.6,-0.65) {管理端（Vue 3 + Element Plus）};
+    \node[comp, minimum width=2.1cm] at (11.6,-0.65) {移动端适配};
+
+    % 接口层
+    \draw[fill=gray!9] (0,-1.6) rectangle (\W,-2.9);
+    \node[anchor=west, font=\heiti\zihao{6}] at (0.15,-2.25) {接口层};
+    \node[comp, minimum width=2.9cm] at (3.6,-2.25) {RESTful API};
+    \node[comp, minimum width=2.9cm] at (7.0,-2.25) {JWT 身份认证};
+    \node[comp, minimum width=2.9cm] at (10.4,-2.25) {统一异常与日志};
+
+    % 业务层
+    \draw[fill=gray!5] (0,-3.2) rectangle (\W,-6.3);
+    \node[anchor=west, font=\heiti\zihao{6}] at (0.15,-4.75) {业务层};
+    \node[comp, minimum width=2.3cm] at (3.4,-3.85) {用户与权限};
+    \node[comp, minimum width=2.3cm] at (6.0,-3.85) {资料管理};
+    \node[comp, minimum width=2.3cm] at (8.6,-3.85) {知识库构建};
+    \node[comp, minimum width=2.3cm] at (11.2,-3.85) {统计与配置};
+    \node[comp, minimum width=2.3cm] at (3.4,-5.45) {混合检索};
+    \node[comp, minimum width=2.3cm] at (6.0,-5.45) {重排序};
+    \node[comp, minimum width=2.3cm] at (8.6,-5.45) {受约束生成};
+    \node[comp, minimum width=2.3cm] at (11.2,-5.45) {引用与拒答};
+
+    % 数据与模型层
+    \draw[fill=gray!9] (0,-6.6) rectangle (\W,-8.0);
+    \node[anchor=west, font=\heiti\zihao{6}, align=left] at (0.15,-7.3) {数据与\\模型层};
+    \node[comp, minimum width=2.4cm] at (3.5,-7.3) {MySQL};
+    \node[comp, minimum width=2.4cm] at (6.2,-7.3) {向量数据库};
+    \node[comp, minimum width=2.8cm] at (9.0,-7.3) {BGE 嵌入/重排};
+    \node[comp, minimum width=2.0cm] at (11.8,-7.3) {大模型 API};
+
+    % 层间箭头
+    \draw[-{Latex[length=2mm]}, thick] (6.7,-1.3) -- (6.7,-1.6);
+    \draw[-{Latex[length=2mm]}, thick] (6.7,-2.9) -- (6.7,-3.2);
+    \draw[-{Latex[length=2mm]}, thick] (6.7,-6.3) -- (6.7,-6.6);
+  \end{tikzpicture}
+  \caption{系统总体架构}
+  \label{fig:architecture}
+\end{figure}
+
+表现层负责页面渲染和交互。学生端以对话页为主，包含问题输入、消息列表、引用卡片和历史会话；管理端采用侧边栏加内容区的布局，包含资料管理、知识库构建、用户角色、统计分析和系统配置。前端通过统一的请求封装处理令牌、错误码和加载状态，避免每个页面重复实现。
+
+接口层负责协议转换、身份认证、参数校验和统一异常处理。所有接口返回统一结构，成功时包含数据，失败时包含错误码和提示信息；令牌解析、角色校验、请求编号生成和耗时统计都在这一层完成。接口层不写业务逻辑，只做“收请求、验身份、调服务、包响应”。
+
+业务层是系统的核心，按领域划分为用户与权限、资料管理、知识库构建、混合检索、重排序、受约束生成、引用与拒答、统计与配置等模块。模块之间通过服务接口调用，不直接访问对方的数据库表。例如，问答模块只依赖“检索服务”的接口，不关心底层是 Chroma 还是其他向量库；生成模块只依赖“模型服务”的接口，不关心具体是大模型 API 还是本地模型。这样可以在不修改业务代码的情况下替换组件。
+
+数据与模型层包括 MySQL、向量数据库、BGE 嵌入与重排模型、大模型 API。MySQL 保存用户、角色、文档、片段元数据、会话、消息、引用、反馈和配置；向量数据库保存片段向量和用于过滤的元数据；BGE 模型负责问题与片段的向量化以及候选重排；大模型 API 负责最终答案生成。模型服务通过超时、重试和熔断机制保护，避免单个外部服务故障拖垮整个问答链路。
+
+在部署上，前端可以打包为静态资源，由 Nginx 托管；后端使用 Uvicorn 或 Gunicorn 运行多个 worker；MySQL 和向量数据库可以同机部署，也可以独立部署；模型服务通过内网或公网访问。对于本科课题的演示环境，单机部署即可满足要求；对于校内正式使用，可以把后端、数据库和模型服务拆分，通过负载均衡和连接池提高并发能力。
+
+\section{知识库与数据处理设计}
+\label{sec:kb-design}
+
+知识库是问答系统的证据来源，其质量直接决定回答的上限。数据处理流程包括上传、格式校验、文本解析、清洗、结构分块、向量化和索引写入，如图~\ref{fig:doc-flow} 所示。
+
+\begin{figure}[H]
+  \centering
+  \begin{tikzpicture}[
+    node distance=0.45cm and 0.45cm,
+    flowstep/.style={draw, rounded corners=3pt, minimum width=2.55cm, minimum height=0.8cm, align=center, fill=gray!8, font=\zihao{5}},
+    arr/.style={-{Latex[length=2mm]}, thick}
+  ]
+    \node[flowstep] (up) at (0,0) {上传文档};
+    \node[flowstep, right=0.4cm of up] (check) {格式校验};
+    \node[flowstep, right=0.4cm of check] (parse) {文本解析};
+    \node[flowstep, right=0.4cm of parse] (clean) {清洗去噪};
+    \node[flowstep, below=1.0cm of clean] (chunk) {结构分块};
+    \node[flowstep, left=0.4cm of chunk] (embed) {向量化};
+    \node[flowstep, left=0.4cm of embed] (index) {索引写入};
+    \node[flowstep, left=0.4cm of index] (done) {完成入库};
+
+    \draw[arr] (up) -- (check);
+    \draw[arr] (check) -- (parse);
+    \draw[arr] (parse) -- (clean);
+    \draw[arr] (clean) -- (chunk);
+    \draw[arr] (chunk) -- (embed);
+    \draw[arr] (embed) -- (index);
+    \draw[arr] (index) -- (done);
+  \end{tikzpicture}
+  \caption{文档处理流程}
+  \label{fig:doc-flow}
+\end{figure}
+
+格式校验首先检查扩展名和 MIME 类型，只允许 PDF、DOCX 和 TXT；然后检查文件大小和页数，避免超大文件拖垮解析服务。文本解析根据格式选择不同的库：PDF 使用 PyMuPDF 或 pdfplumber 提取文本和页码，DOCX 使用 python-docx 读取段落和表格，TXT 按编码探测后直接读取。解析结果保留页码、标题层级和段落顺序，为后续分块和引用定位提供依据。
+
+清洗阶段去除页眉页脚、重复的空行、乱码和无关的广告信息，统一全角半角标点和空白字符。对于扫描版 PDF，文本提取可能为空，系统应提示用户该文件需要 OCR，暂不进入知识库；后续可以接入 OCR 服务作为扩展。清洗不能过度删除内容，例如条款编号、日期和金额往往是回答的关键，需要保留。
+
+分块是数据处理中最影响效果的环节。固定长度切分实现简单，但容易把一条完整的规定或一个操作步骤拆到两个片段中；按段落切分可以保持语义完整，但段落长度差异大，过长的段落会超出嵌入模型输入上限。本课题采用结构感知的分块策略：先按标题层级把文档切成章节，再在章节内按段落和句子切分，目标长度为 500 至 800 个汉字，相邻片段保留 80 至 120 个汉字的重叠；对于表格和列表，尽量保持整表或整条不拆开；每个片段记录文档编号、标题路径、页码、分类和权限标签。设文档长度为 $L$，分块长度为 $c$，重叠长度为 $o$，则片段数量可按式~\eqref{eq:chunk-count} 估算
+\begin{equation}
+  n=\left\lceil\frac{L-o}{c-o}\right\rceil .
+  \label{eq:chunk-count}
+\end{equation}
+该式用于预估存储和向量化开销，实际数量还会受到标题边界和段落边界的影响。
+
+向量化阶段调用 BGE 模型把每个片段编码为向量，写入向量数据库。为了支持增量更新，系统为文档和片段分配稳定的编号，重建时先按文档编号删除旧片段，再写入新片段；如果中途失败，任务状态标记为“失败”，保留旧索引，避免知识库出现一半新一半旧的中间状态。向量库中的每条记录包含片段编号、文档编号、向量、原文和元数据，元数据用于按分类、权限和更新时间过滤。
+
+知识库构建采用异步任务。管理员上传文档后，接口立即返回文档编号和“待处理”状态，后台任务依次执行解析、分块、向量化和索引写入，前端轮询任务状态。任务表记录开始时间、结束时间、重试次数和失败原因，管理员可以查看失败详情并手动重试。对于批量上传，系统按文档逐个处理，单个文档失败不影响其他文档；对于重复上传，系统根据文件哈希判断是否已存在，若存在则提示用户选择覆盖或跳过。
+
+\section{检索增强问答流程设计}
+\label{sec:qa-design}
+
+问答流程是系统的主链路，包括问题改写、双路召回、融合、重排、提示词组装、生成、引用校验和拒答。其时序关系如图~\ref{fig:sequence} 所示。
+
+\begin{figure}[H]
+  \centering
+  \begin{tikzpicture}[
+    font=\zihao{6},
+    actor/.style={draw, rounded corners=2pt, minimum width=1.7cm, minimum height=0.6cm, align=center, fill=gray!10, font=\zihao{6}},
+    msg/.style={-{Latex[length=1.6mm]}, thick},
+    lbl/.style={font=\zihao{6}, fill=white, inner sep=1pt}
+  ]
+    \def\yA{0}
+    \def\yB{-9.2}
+    \node[actor] (u) at (0,\yA) {用户};
+    \node[actor] (f) at (2.6,\yA) {前端};
+    \node[actor] (q) at (5.2,\yA) {问答服务};
+    \node[actor] (r) at (7.8,\yA) {检索服务};
+    \node[actor] (l) at (10.4,\yA) {大模型};
+    \node[actor] (d) at (13.0,\yA) {数据库};
+
+    \foreach \x in {0,2.6,5.2,7.8,10.4,13.0} {
+      \draw[dashed, gray] (\x,-0.35) -- (\x,\yB);
+    }
+
+    \draw[msg] (0,-1.0) -- (2.6,-1.0) node[lbl, midway, above] {提交问题};
+    \draw[msg] (2.6,-1.55) -- (5.2,-1.55) node[lbl, midway, above] {POST /qa/ask};
+    \draw[msg] (5.2,-2.1) -- (13.0,-2.1) node[lbl, midway, above] {读取会话历史};
+    \draw[msg] (13.0,-2.55) -- (5.2,-2.55) node[lbl, midway, above] {返回最近 $N$ 轮};
+    \draw[msg] (5.2,-3.05) -- (7.8,-3.05) node[lbl, midway, above] {改写后的问题};
+    \draw[msg] (7.8,-3.55) -- (5.2,-3.55) node[lbl, midway, above] {双路候选};
+    \draw[msg] (5.2,-4.05) -- (7.8,-4.05) node[lbl, midway, above] {融合与重排};
+    \draw[msg] (7.8,-4.55) -- (5.2,-4.55) node[lbl, midway, above] {Top-$k$ 证据};
+    \draw[msg] (5.2,-5.1) -- (10.4,-5.1) node[lbl, midway, above] {问题 + 证据 + 约束};
+    \draw[msg] (10.4,-5.75) -- (5.2,-5.75) node[lbl, midway, above] {答案 + 引用编号};
+    \draw[msg] (5.2,-6.3) -- (7.8,-6.3) node[lbl, midway, above] {引用校验};
+    \draw[msg] (7.8,-6.8) -- (5.2,-6.8) node[lbl, midway, above] {校验结果};
+    \draw[msg] (5.2,-7.35) -- (13.0,-7.35) node[lbl, midway, above] {保存消息、引用、耗时};
+    \draw[msg] (5.2,-7.95) -- (2.6,-7.95) node[lbl, midway, above] {答案与来源卡片};
+    \draw[msg] (2.6,-8.5) -- (0,-8.5) node[lbl, midway, above] {展示答案};
+  \end{tikzpicture}
+  \caption{问答流程时序图}
+  \label{fig:sequence}
+\end{figure}
+
+问题改写模块读取最近 $N$ 轮会话，把当前问题、上一轮问题和系统回答一起送入改写模型，输出自包含的检索查询。改写只用于检索，最终回答仍以用户原始问题为准；如果改写结果与原问题差异过大，系统保留原始查询作为兜底，两路查询分别召回后合并，避免改写错误导致完全跑题。
+
+双路召回包括 BM25 和向量检索。BM25 使用中文分词后的词项建立倒排索引，适合匹配文件编号、条款序号和专有名词；向量检索使用 BGE 模型编码问题和片段，适合处理同义表达和口语化提问。两路各取前 $k_1$ 条候选，使用式~\eqref{eq:rrf} 的 RRF 方法融合。融合后取前 $k_2$ 条送入交叉编码器重排，重排分数低于阈值 $\tau$ 的候选被丢弃。若所有候选都被丢弃，系统判定证据不足，执行拒答。
+
+提示词组装把系统角色、用户问题、候选证据和输出要求组合在一起。系统角色说明“你是校园问答助手，只能依据给定资料回答”；证据按编号排列，每条包含文档标题、章节路径和原文；输出要求包括“先回答结论，再说明依据”“每个关键结论标注引用编号”“不得编造资料中没有的信息”“证据不足时明确说明”。为了降低模型忽略证据的风险，提示词把证据放在问题之前，并要求模型在答案末尾列出使用的引用编号，便于后端解析和校验。
+
+生成后的引用校验分三步。第一步，检查答案中的引用编号是否都在候选证据编号集合内，越界的编号视为无效；第二步，检查每个被引用的片段是否仍然存在、当前用户是否有权限查看；第三步，检查答案中的关键结论是否能对应到至少一条引用片段，可以通过关键词覆盖或调用一次轻量判断模型完成。校验通过则返回答案和来源卡片；校验不通过则隐藏无效引用，并把答案降级为“以下是检索到的原文片段”，或者直接拒答。拒答不是失败，而是系统在证据不足时的保护机制，可以避免用户把无依据的内容当成学校规定。
+
+检索与生成的主要参数如表~\ref{tab:params} 所示。这些参数不是固定不变的，需要根据知识库规模、文档长度和模型能力调整。例如，知识库较大时可以适当提高 $k_1$，但重排的 $k_2$ 不宜过大，否则会增加时延并引入噪声；阈值 $\tau$ 过高会导致大量拒答，过低则会放过无关证据，需要通过测试集确定。
+
+\begin{table}[H]
+  \centering
+  \caption{检索与生成的主要参数}
+  \label{tab:params}
+  \zihao{5}
+  \renewcommand{\arraystretch}{1.25}
+  \begin{tabular}{p{2.6cm}p{6.2cm}p{3.2cm}}
+    \toprule
+    参数 & 含义 & 建议取值 \\
+    \midrule
+    $k_1$ & 每个召回通道返回的候选数 & 20～30 \\
+    $k_2$ & 进入重排的候选数 & 8～12 \\
+    $k$ & RRF 平滑常数 & 60 \\
+    $\tau$ & 重排相关性阈值 & 0.35～0.55 \\
+    $N$ & 参与改写的最近会话轮数 & 3～5 \\
+    $T$ & 大模型温度 & 0.1～0.3 \\
+    $t_{\max}$ & 单次问答超时时间 & 8 s \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\section{数据库与接口设计}
+\label{sec:db-api}
+
+系统的核心实体包括用户、角色、文档、知识片段、会话、消息、引用和反馈。实体关系如图~\ref{fig:er} 所示。用户通过角色获得权限；用户拥有多个会话；会话包含多条消息；消息可以产生反馈；文档被切分为多个知识片段；消息通过引用关联到知识片段，引用表同时保存引用序号和原文快照，防止片段被删除后无法追溯。
+
+\begin{figure}[H]
+  \centering
+  \begin{tikzpicture}[
+    font=\zihao{6},
+    entity/.style={draw, rectangle split, rectangle split parts=2, rounded corners=2pt, align=left, text width=3.25cm, fill=gray!7, inner sep=4pt},
+    rel/.style={thick}
+  ]
+    \node[entity] (role) at (0,0) {\textbf{角色}\nodepart{second}角色编号\\角色名称\\权限集合};
+    \node[entity] (user) at (4.5,0) {\textbf{用户}\nodepart{second}用户编号\\账号\\密码哈希\\角色编号};
+    \node[entity] (doc) at (9.0,0) {\textbf{文档}\nodepart{second}文档编号\\标题\\分类\\权限标签};
+    \node[entity] (conv) at (0,-3.1) {\textbf{会话}\nodepart{second}会话编号\\用户编号\\开始时间};
+    \node[entity] (msg) at (4.5,-3.1) {\textbf{消息}\nodepart{second}消息编号\\会话编号\\问题\\答案};
+    \node[entity] (chunk) at (9.0,-3.1) {\textbf{知识片段}\nodepart{second}片段编号\\文档编号\\原文\\向量};
+    \node[entity] (fb) at (0,-6.2) {\textbf{反馈}\nodepart{second}反馈编号\\消息编号\\满意度};
+    \node[entity] (cite) at (4.5,-6.2) {\textbf{引用}\nodepart{second}引用编号\\消息编号\\片段编号\\原文快照};
+
+    \draw[rel] (role.east) -- node[above] {1 : N} (user.west);
+    \draw[rel] (user.south) -- node[right] {1 : N} (conv.north);
+    \draw[rel] (conv.east) -- node[above] {1 : N} (msg.west);
+    \draw[rel] (msg.south) -- node[right] {1 : N} (cite.north);
+    \draw[rel] (msg.south west) -- node[left] {1 : N} (fb.north east);
+    \draw[rel] (doc.south) -- node[right] {1 : N} (chunk.north);
+    \draw[rel] (chunk.west) -- node[above] {1 : N} (cite.east);
+  \end{tikzpicture}
+  \caption{核心数据实体关系图}
+  \label{fig:er}
+\end{figure}
+
+数据库表按领域划分。用户与权限域包含用户、角色、权限和角色权限四张表；资料域包含文档、片段和分类三张表；问答域包含会话、消息和引用三张表；反馈与配置域包含反馈、配置和任务三张表。核心表及主要字段如表~\ref{tab:db} 所示。表设计遵循第三范式，常用查询字段建立索引，例如文档的分类和状态、消息的会话编号和创建时间、引用的消息编号。
+
+\begin{table}[H]
+  \centering
+  \caption{核心数据表设计}
+  \label{tab:db}
+  \zihao{5}
+  \renewcommand{\arraystretch}{1.2}
+  \begin{tabular}{p{2.8cm}p{6.0cm}p{3.9cm}}
+    \toprule
+    表名 & 主要字段 & 说明 \\
+    \midrule
+    \texttt{user} & id, username, password\_hash, role\_id, status, created\_at & 用户账号与角色 \\
+    \texttt{document} & id, title, category\_id, file\_path, permission, status, hash & 文档元数据与处理状态 \\
+    \texttt{chunk} & id, document\_id, content, page\_no, heading\_path, vector\_id & 知识片段及定位信息 \\
+    \texttt{conversation} & id, user\_id, title, created\_at, updated\_at & 会话 \\
+    \texttt{message} & id, conversation\_id, role, content, latency, created\_at & 问题与答案 \\
+    \texttt{citation} & id, message\_id, chunk\_id, quote, rank & 答案引用的片段快照 \\
+    \texttt{feedback} & id, message\_id, score, comment, created\_at & 满意度反馈 \\
+    \texttt{config} & key, value, description, updated\_at & 检索与模型参数 \\
+    \texttt{task} & id, document\_id, type, status, retry, error & 异步任务状态 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+接口采用 RESTful 风格，按资源划分路径，使用 HTTP 方法表达操作语义。主要接口如表~\ref{tab:api} 所示。接口统一使用 JSON 请求和响应，分页参数为 \texttt{page} 和 \texttt{page\_size}，错误响应包含 \texttt{code}、\texttt{message} 和 \texttt{request\_id}。对于耗时操作，接口返回任务编号，由前端轮询任务状态，避免长时间阻塞 HTTP 连接。
+
+\begin{table}[H]
+  \centering
+  \caption{主要 RESTful 接口}
+  \label{tab:api}
+  \zihao{5}
+  \renewcommand{\arraystretch}{1.2}
+  \begin{tabular}{p{1.3cm}p{5.0cm}p{4.9cm}p{1.7cm}}
+    \toprule
+    方法 & 路径 & 功能 & 权限 \\
+    \midrule
+    POST & /api/auth/login & 登录并签发令牌 & 公开 \\
+    GET & /api/documents & 分页查询文档 & 管理员 \\
+    POST & /api/documents & 上传文档并创建解析任务 & 管理员 \\
+    DELETE & /api/documents/\{id\} & 删除文档及其片段 & 管理员 \\
+    POST & /api/kb/rebuild & 重建指定文档的索引 & 管理员 \\
+    POST & /api/qa/ask & 提问并返回答案与引用 & 登录用户 \\
+    GET & /api/qa/history & 查询当前用户的历史会话 & 登录用户 \\
+    POST & /api/feedback & 提交满意度反馈 & 登录用户 \\
+    GET & /api/admin/stats & 查询高频问题与使用统计 & 管理员 \\
+    PUT & /api/admin/config & 修改检索与模型参数 & 管理员 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\section{权限与安全设计}
+\label{sec:security-design}
+
+权限与安全设计贯穿认证、授权、数据访问和审计四个层面。认证解决“你是谁”，授权解决“你能做什么”，数据访问控制解决“你能看到哪些内容”，审计解决“你做过什么”。四者缺一不可。
+
+认证采用 JWT。用户登录时，后端根据用户名查询用户记录，使用 bcrypt 校验密码；校验通过后，生成包含用户编号、角色编号、签发时间和过期时间的令牌，使用 HS256 或 RS256 签名；令牌返回前端后，前端在每次请求的 \texttt{Authorization} 头中携带 \texttt{Bearer} 令牌；后端依赖项解析令牌，校验签名、过期时间和用户状态，把当前用户注入请求上下文。令牌有效期设置为 2 小时，刷新令牌有效期为 7 天；用户修改密码或管理员禁用账号时，把用户编号写入失效列表，后端在校验时拒绝失效列表中的令牌。
+
+授权采用 RBAC。系统预置学生、教师、管理员、超级管理员四个角色，权限以“资源:操作”的形式定义，例如 \texttt{document:read}、\texttt{document:write}、\texttt{qa:ask}、\texttt{stats:read}。角色与权限多对多，用户与角色多对一。后端在路由上声明所需权限，依赖项在请求进入业务逻辑前完成校验；前端根据登录接口返回的权限集合控制菜单和按钮的显示。对于“只能操作自己的数据”这类要求，还需要在业务层做数据级校验，例如学生只能查看自己的会话，教师只能查看授权范围内的统计。
+
+数据访问控制重点在知识库检索。文档和片段都带权限标签，标签可以是“公开”“校内”“角色限定”。检索时，系统先把用户角色转换为可见标签集合，再在向量数据库的元数据过滤和 BM25 的查询条件中加入权限过滤，确保候选片段对当前用户可见。引用展示时再次校验片段权限，防止文档在会话期间被修改权限导致越权。对于管理员，可以查看所有公开和校内资料，但敏感资料仍需超级管理员授权。
+
+其他安全措施包括：密码使用 bcrypt 加盐哈希，禁止明文存储和日志输出；数据库密码、JWT 密钥、大模型 API Key 通过环境变量注入，配置文件只保存占位符，仓库中不提交真实密钥；上传文件校验扩展名、MIME 类型、大小和页数，解析过程设置超时和内存上限；接口对问题长度、分页大小、检索条数做范围校验，防止资源耗尽；登录、上传、问答接口按用户和 IP 做频率限制；日志记录请求编号、用户编号、接口、耗时和错误码，对手机号、身份证号等敏感字段脱敏；定期备份 MySQL 和向量库，备份文件加密保存。上述措施不能完全消除风险，但可以覆盖本科课题演示环境的主要威胁。
+
+

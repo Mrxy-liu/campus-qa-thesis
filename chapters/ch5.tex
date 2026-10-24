@@ -1,0 +1,164 @@
+\chapter{系统实现}
+\label{chap:implementation}
+
+本章说明系统的开发环境、项目结构和关键模块的实现。重点不在逐行解释代码，而在说明每个模块如何落实第~\ref{chap:design} 章的设计：认证与授权如何拦截请求，文档如何被解析和分块，双路召回如何融合，提示词如何约束生成，引用如何校验，统计如何聚合。代码片段只保留与论文设计对应的核心部分，完整的配置、异常处理和前端页面不在正文中展开。
+
+\section{开发环境与项目结构}
+\label{sec:environment}
+
+系统采用前后端分离结构，开发环境如表~\ref{tab:env} 所示。后端使用 Python 3.11，前端使用 Node.js 20，数据库为 MySQL 8.0，向量库为 Chroma，嵌入模型选用 BGE 中文小模型，重排模型选用对应的交叉编码器，大模型通过兼容 OpenAI 协议的 HTTP 接口调用。开发工具包括 VS Code、Navicat、Postman 和 Git。
+
+\begin{table}[H]
+  \centering
+  \caption{开发环境}
+  \label{tab:env}
+  \zihao{5}
+  \renewcommand{\arraystretch}{1.25}
+  \begin{tabular}{p{3.0cm}p{9.6cm}}
+    \toprule
+    类别 & 配置 \\
+    \midrule
+    操作系统 & Windows 11，开发与演示环境 \\
+    后端 & Python 3.11，FastAPI，Uvicorn，SQLAlchemy \\
+    前端 & Node.js 20，Vue 3，Vite，Element Plus，Axios \\
+    数据库 & MySQL 8.0，InnoDB，utf8mb4 \\
+    向量库 & Chroma，本地持久化模式 \\
+    嵌入与重排 & BGE 中文小模型，交叉编码器重排模型 \\
+    大模型 & 兼容 OpenAI 协议的可配置 API \\
+    文档解析 & PyMuPDF、python-docx、chardet \\
+    版本管理 & Git，GitHub 远程仓库 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+项目分为后端、前端和部署三个部分。后端按领域划分目录：\texttt{api} 存放路由，\texttt{core} 存放配置、安全和依赖，\texttt{models} 存放 SQLAlchemy 模型，\texttt{schemas} 存放请求与响应结构，\texttt{services} 存放认证、文档、检索、生成和统计服务，\texttt{tasks} 存放异步任务，\texttt{utils} 存放分块、文本清洗和引用解析工具。前端按页面和组件划分：\texttt{views} 存放登录、问答、历史、资料、统计和配置页面，\texttt{components} 存放消息气泡、引用卡片、上传组件和图表组件，\texttt{api} 封装接口请求，\texttt{stores} 管理用户和会话状态。部署部分包括 Nginx 配置、环境变量示例、数据库初始化脚本和启动说明。
+
+配置通过环境变量注入，包括数据库连接、JWT 密钥、大模型地址与密钥、嵌入模型路径、向量库路径、检索参数和日志级别。仓库只提交 \texttt{.env.example}，不提交真实密钥；本地开发使用 \texttt{.env}，部署时由运行环境注入。这样做可以避免密钥进入版本历史，也便于在不同环境之间切换。
+
+\section{用户与权限管理}
+\label{sec:auth-impl}
+
+登录接口接收用户名和密码，先根据用户名查询用户记录，再使用 bcrypt 校验密码。校验通过后，服务读取用户的角色和权限，生成 JWT。令牌中只放用户编号、角色编号、签发时间和过期时间，不放密码、手机号等敏感信息。前端把令牌保存在内存或 \texttt{sessionStorage} 中，每次请求由 Axios 拦截器添加到 \texttt{Authorization} 头；令牌过期时，前端跳转登录页，避免在页面中反复弹出错误。
+
+后端的认证与授权通过 FastAPI 依赖注入实现。认证依赖解析令牌、校验签名和有效期、查询用户状态；授权依赖检查当前用户是否具备路由声明的权限。核心代码如下所示。
+
+\begingroup\linespread{1.0}\selectfont
+\begin{lstlisting}[language=Python]
+def get_current_user(
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db),
+) -> User:
+    payload = decode_token(token)
+    user = db.get(User, int(payload["sub"]))
+    if user is None or user.status != "active":
+        raise HTTPException(status_code=401, detail="invalid token")
+    return user
+
+
+def require_permission(permission: str):
+    def checker(user: User = Depends(get_current_user)) -> User:
+        if permission not in user.permission_codes:
+            raise HTTPException(status_code=403, detail="forbidden")
+        return user
+    return checker
+\end{lstlisting}
+\endgroup
+
+路由上通过 \texttt{Depends(require\_permission("document:write"))} 声明权限，业务代码不需要重复判断角色。对于“只能查看自己的会话”这类数据级权限，服务层在查询时附加 \texttt{user\_id} 条件，而不是先查出全部数据再在前端过滤。管理员接口还会记录操作日志，包括操作人、操作对象、操作类型和结果，便于审计。
+
+前端根据登录接口返回的权限集合生成菜单。没有权限的菜单不渲染，按钮置灰或隐藏；但前端隐藏只是体验优化，真正的拦截在后端。令牌刷新采用双令牌机制：访问令牌过期后，前端用刷新令牌换取新的访问令牌；刷新令牌也过期时，跳转登录页。注销时，前端清除本地令牌，后端把当前令牌加入短期失效列表，避免令牌在有效期内被继续使用。
+
+\section{文档管理与知识库构建}
+\label{sec:doc-impl}
+
+文档上传接口接收 multipart 表单，字段包括文件、标题、分类、权限标签和备注。服务先计算文件 SHA-256，查询是否已有相同哈希的文档；若存在，返回重复提示，由用户选择覆盖或跳过。随后校验扩展名、MIME 类型、大小和页数，保存原文件到按日期分层的目录，并在 \texttt{document} 表插入记录，状态为“待处理”。接口立即返回文档编号，解析任务交给后台执行。
+
+解析服务根据文件类型选择解析器。PDF 使用 PyMuPDF 逐页提取文本和页码，DOCX 使用 python-docx 读取段落、表格和样式，TXT 使用 chardet 探测编码后读取。解析结果统一为“块”列表，每个块包含文本、页码、样式层级和类型（标题、正文、表格、列表）。清洗时去除页眉页脚、连续空行和重复字符，保留条款编号、日期和金额等关键信息。
+
+分块服务先按标题层级把块序列切成章节，再在章节内按段落和句子累积，直到达到目标长度。若当前段落加入后超过最大长度，则在句子边界处截断；相邻片段保留一定重叠，避免答案被切断。核心逻辑如下所示。
+
+\begingroup\linespread{1.0}\selectfont
+\begin{lstlisting}[language=Python]
+def structure_aware_chunks(blocks, max_len=800, overlap=100):
+    chunks, buf, heading = [], [], ""
+    for block in blocks:
+        if block.kind == "heading":
+            if buf: chunks.append(make_chunk(buf, heading)); buf = []
+            heading = block.text.strip(); continue
+        if len("".join(buf)) + len(block.text) <= max_len:
+            buf.append(block.text)
+        else:
+            chunks.append(make_chunk(buf, heading))
+            buf = ["".join(buf)[-overlap:], block.text]
+    if buf: chunks.append(make_chunk(buf, heading))
+    return chunks
+\end{lstlisting}
+\endgroup
+
+每个片段写入 \texttt{chunk} 表，保存文档编号、原文、页码、标题路径和向量编号；同时调用嵌入模型生成向量，写入 Chroma。写入采用“先删旧、再写新”的策略：重建某篇文档时，先按文档编号删除旧片段和旧向量，再批量写入新片段；如果中途失败，任务状态记为失败，旧索引保持不变，避免知识库出现不完整的中间状态。批量写入使用固定大小的批次，降低内存占用；嵌入模型不可用时，任务进入重试队列，最多重试三次，仍失败则通知管理员。
+
+知识库构建页面展示文档列表、处理状态、片段数量、更新时间和操作按钮。管理员可以按分类、状态和关键词筛选，查看失败原因，单篇重试或批量重建。前端轮询任务状态，处理中显示进度条，成功后提示片段数量，失败时展开错误详情。对于扫描版 PDF，解析结果为空时提示“该文件可能需要 OCR”，并给出转为文本后重新上传的建议。
+
+\section{混合检索与重排序实现}
+\label{sec:retrieval-impl}
+
+检索服务对外提供统一的 \texttt{search(query, user, top\_k)} 接口，内部依次执行 BM25 召回、向量召回、RRF 融合和交叉编码器重排。BM25 使用中文分词后的词项建立索引，索引在文档入库时增量更新；向量召回调用嵌入模型编码查询，再在 Chroma 中按余弦相似度取前 $k_1$ 条。两路召回都带上权限过滤条件，确保候选片段对当前用户可见。
+
+RRF 融合只依赖排名，不依赖原始分数，因此不需要对 BM25 分数和余弦相似度做归一化。实现时把两路召回结果转换为“片段编号列表”，再按式~\eqref{eq:rrf} 累加分数。核心代码如下所示。
+
+\begingroup\linespread{1.0}\selectfont
+\begin{lstlisting}[language=Python]
+def reciprocal_rank_fusion(rankings, k=60):
+    scores = defaultdict(float)
+    for ranking in rankings:
+        for rank, chunk_id in enumerate(ranking, start=1):
+            scores[chunk_id] += 1.0 / (k + rank)
+    return sorted(scores.items(), key=lambda x: x[1], reverse=True)
+\end{lstlisting}
+\endgroup
+
+融合后取前 $k_2$ 条候选送入重排模型。重排模型把查询和片段拼接后编码，输出相关性分数；服务按分数降序排序，丢弃低于阈值 $\tau$ 的候选。若候选为空或全部低于阈值，返回空结果，由问答服务执行拒答。重排阶段设置超时，超时则退化为 RRF 排序，保证接口在模型服务不稳定时仍能返回结果。
+
+为了观察检索效果，服务记录每次请求的查询、召回通道、候选数量、融合耗时、重排耗时和最终分数。日志按请求编号关联，便于分析“某类问题总是召回不到”或“重排把正确片段排到后面”的原因。管理端提供检索调试页面，管理员输入问题后可以查看两路召回结果、融合排名和重排分数，辅助调整参数和补充资料。
+
+\section{受约束生成、引用溯源与多轮会话}
+\label{sec:generation-impl}
+
+生成服务把系统提示、证据、问题和输出约束组装成消息列表，调用大模型接口。系统提示明确角色和边界；证据按编号排列，每条包含标题、章节路径和原文；用户问题保留原始表述；输出约束要求先给结论、再给依据、关键结论标注引用编号、不得编造资料中没有的信息、证据不足时说明无法回答。提示词模板的核心部分如下所示。
+
+\begingroup\linespread{1.0}\selectfont
+\begin{lstlisting}[language=Python]
+SYSTEM_PROMPT = """You are a campus question-answering assistant.
+Answer ONLY with the evidence below. Do not use outside knowledge.
+Cite the evidence number in square brackets after each key claim.
+If the evidence is insufficient, say you cannot answer and explain why.
+"""
+
+USER_PROMPT = """[Evidence]
+{evidence}
+
+[Question]
+{question}
+
+[Output]
+1. A concise answer with citations like [1].
+2. A short list of the evidence numbers you used.
+"""
+\end{lstlisting}
+\endgroup
+
+生成结果先经过引用解析。服务用正则表达式提取答案中的 \texttt{[n]} 编号，检查编号是否在候选证据集合内；再检查每个编号对应的片段是否存在、当前用户是否有权限查看；最后把答案中的关键句与引用片段做关键词覆盖检查。若引用编号越界或片段无效，服务隐藏无效引用，并把答案降级为摘录式回答；若答案没有任何引用，服务在末尾追加“以上内容未找到明确依据”，并标记为需人工检查。
+
+多轮会话在生成前执行问题改写。服务读取最近 $N$ 轮消息，把当前问题、上一轮问题和上一轮答案送入改写模型，要求输出一个不依赖上下文的自包含问题。改写结果用于检索，原始问题用于生成和日志。若改写结果为空或与原问题差异过大，服务保留原始问题作为兜底查询，两路查询分别召回后合并，避免改写错误导致完全跑题。会话消息保存问题时同时保存改写后的问题、引用片段和耗时，便于后续分析。
+
+拒答策略根据证据情况分三级。第一级，检索为空或最高重排分数低于阈值，直接返回“暂时找不到相关依据”，并建议用户换一种问法或选择分类。第二级，证据存在但引用校验失败，返回检索到的原文片段，并说明“以下为检索到的资料，未生成总结”。第三级，模型超时或返回格式错误，重试一次；仍失败则返回原文片段，并记录失败日志。三级策略的共同目标是：宁可少答，也不返回没有依据的内容。
+
+\section{管理统计与系统配置}
+\label{sec:stats-impl}
+
+统计服务按时间范围、分类和用户角色聚合问答数据，提供高频问题、未解决问题、知识库使用量、满意度和平均响应时延等指标。高频问题按规范化后的问题文本分组，去除标点和停用词，避免“补办学生证需要什么材料”和“补办学生证要哪些材料”被算成两个问题；未解决问题包括拒答、引用校验失败和用户点踩的消息；知识库使用量统计文档数量、片段数量、检索次数和命中片段分布；满意度按好评率和平均分展示；响应时延按检索、重排、生成三段拆分，便于定位瓶颈。
+
+统计接口使用分页和聚合查询，避免一次性加载全部明细。高频问题按出现次数降序取前 20 条，未解决问题按时间倒序取前 50 条，趋势图按天聚合。管理端使用表格和图表展示，支持导出 CSV。对于数据量较大的场景，可以增加按天预聚合的统计表，定时任务把明细汇总为日指标，查询时直接读取汇总表。
+
+系统配置页面提供检索条数、RRF 常数、重排阈值、模型名称、超时时间、拒答提示语等配置项。配置保存前做类型和范围校验，例如 $k_1$ 必须在 5 到 100 之间，$\tau$ 必须在 0 到 1 之间，超时时间必须在 3 到 30 秒之间；保存后写入 \texttt{config} 表并刷新缓存，下一次请求生效。配置修改记录操作人和修改前后值，便于回滚。密钥类配置不在页面展示，只允许通过环境变量注入，避免管理员误操作或页面泄露。
+

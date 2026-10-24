@@ -1,0 +1,16 @@
+build/
+extract/
+test/
+提交/
+*.aux
+*.log
+*.out
+*.toc
+*.lof
+*.lot
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+*.xdv
+.DS_Store
+Thumbs.db

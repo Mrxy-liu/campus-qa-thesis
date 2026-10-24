@@ -1,0 +1,258 @@
+% !TeX program = xelatex
+% 北京工业大学耿丹学院本科毕业设计（论文）
+% 题目：基于大模型的校园智能问答系统的设计与实现
+% 说明：使用 XeLaTeX 编译，生成 main.pdf。
+\documentclass[UTF8,a4paper,zihao=-4,fontset=windows,oneside]{ctexbook}
+
+% ---------- 页面设置 ----------
+\usepackage{geometry}
+\geometry{
+  a4paper,
+  top=25.4mm,
+  bottom=25.4mm,
+  left=31.7mm,
+  right=31.7mm,
+  headheight=14pt,
+  headsep=6mm,
+  footskip=9mm
+}
+
+% ---------- 字体与行距 ----------
+\setmainfont{Times New Roman}
+\setCJKfamilyfont{zhsong}{SimSun}[BoldFont=SimHei]
+\linespread{1.5}
+\setlength{\parindent}{2em}
+\setlength{\parskip}{6pt plus 1pt minus 1pt}
+
+% ---------- 常用宏包 ----------
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs,longtable,array,multirow}
+\usepackage{float}
+\usepackage{caption}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta,shapes.geometric,shapes.multipart,fit,backgrounds,calc,chains}
+\usepackage{enumitem}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{fancyhdr}
+\usepackage{tocloft}
+\usepackage[hidelinks,bookmarksnumbered=true]{hyperref}
+\hypersetup{
+  pdftitle={基于大模型的校园智能问答系统的设计与实现},
+  pdfauthor={刘奇},
+  pdfsubject={北京工业大学耿丹学院本科毕业设计（论文）},
+  pdfkeywords={校园问答, 检索增强生成, 混合检索, 引用溯源}
+}
+
+% ---------- 标题格式 ----------
+\ctexset{
+  chapter={
+    name={第,章},
+    number=\arabic{chapter},
+    format={\centering\heiti\zihao{2}\linespread{2.41}\selectfont},
+    aftername={\quad},
+    beforeskip=6pt,
+    afterskip=18pt
+  },
+  section={
+    format={\heiti\zihao{3}},
+    aftername={\hspace{0.5em}},
+    beforeskip=6pt,
+    afterskip=6pt
+  },
+  subsection={
+    format={\heiti\zihao{-4}},
+    aftername={\hspace{0.5em}},
+    beforeskip=6pt,
+    afterskip=6pt
+  }
+}
+
+% ---------- 图表与公式编号 ----------
+\numberwithin{figure}{chapter}
+\numberwithin{table}{chapter}
+\numberwithin{equation}{chapter}
+\renewcommand{\thefigure}{\thechapter-\arabic{figure}}
+\renewcommand{\thetable}{\thechapter-\arabic{table}}
+\renewcommand{\theequation}{\thechapter-\arabic{equation}}
+
+\DeclareCaptionFont{wuhao}{\zihao{5}}
+\captionsetup{
+  font=wuhao,
+  labelfont=wuhao,
+  textfont=wuhao,
+  labelsep=space,
+  justification=centering,
+  skip=6pt
+}
+\captionsetup[table]{position=top}
+
+% ---------- 页眉页脚 ----------
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[C]{\songti\zihao{5}\leftmark}
+\fancyfoot[C]{\songti\zihao{5}\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\footrulewidth}{0pt}
+\fancypagestyle{plain}{
+  \fancyhf{}
+  \fancyhead[C]{\songti\zihao{5}\leftmark}
+  \fancyfoot[C]{\songti\zihao{5}\thepage}
+  \renewcommand{\headrulewidth}{0.4pt}
+  \renewcommand{\footrulewidth}{0pt}
+}
+\renewcommand{\chaptermark}[1]{\markboth{北京工业大学耿丹学院 2027 届毕业设计（论文）}{}}
+
+% ---------- 目录样式 ----------
+\renewcommand{\contentsname}{目\quad 录}
+\setcounter{tocdepth}{2}
+\renewcommand{\cftchapfont}{\heiti\zihao{-4}}
+\renewcommand{\cftchappagefont}{\heiti\zihao{-4}}
+\renewcommand{\cftsecfont}{\songti\zihao{-4}}
+\renewcommand{\cftsecpagefont}{\songti\zihao{-4}}
+\renewcommand{\cftsubsecfont}{\songti\zihao{-4}}
+\renewcommand{\cftsubsecpagefont}{\songti\zihao{-4}}
+\renewcommand{\cftchapleader}{\cftdotfill{\cftdotsep}}
+\renewcommand{\cftsecleader}{\cftdotfill{\cftdotsep}}
+\renewcommand{\cftsubsecleader}{\cftdotfill{\cftdotsep}}
+\setlength{\cftchapindent}{0pt}
+\setlength{\cftsecindent}{2em}
+\setlength{\cftsubsecindent}{4em}
+\setlength{\cftbeforechapskip}{2pt}
+\setlength{\cftbeforesecskip}{1pt}
+\setlength{\cftbeforesubsecskip}{1pt}
+
+% ---------- 引用上标 ----------
+\newcommand{\upcite}[1]{\raisebox{0.55ex}{\zihao{-4}\cite{#1}}}
+
+% ---------- 代码样式 ----------
+\lstset{
+  basicstyle=\ttfamily\zihao{-5},
+  keywordstyle=\bfseries,
+  commentstyle=\itshape,
+  numbers=left,
+  numberstyle=\tiny,
+  frame=single,
+  breaklines=true,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+  tabsize=2,
+  xleftmargin=1.5em,
+  framexleftmargin=1em
+}
+
+\begin{document}
+
+% ==================== 封面 ====================
+\begin{titlepage}
+  \thispagestyle{empty}
+  \centering
+  \vspace*{1.2cm}
+
+  {\heiti\zihao{1} 北京工业大学耿丹学院\par}
+  \vspace{0.6cm}
+  {\heiti\zihao{2} 毕业设计（论文）\par}
+  \vspace{2.0cm}
+
+  {\songti\bfseries\zihao{3} 题目：基于大模型的校园智能问答系统的设计与实现\par}
+  \vspace{1.8cm}
+
+  {\zihao{3}\songti\bfseries
+  \renewcommand{\arraystretch}{1.55}
+  \begin{tabular}{r@{\quad}l}
+    姓\qquad 名 & \underline{\makebox[5.2cm][c]{刘\quad 奇}} \\
+    二级学院 & \underline{\makebox[5.2cm][c]{信息工程学院}} \\
+    专\qquad 业 & \underline{\makebox[5.2cm][c]{计算机科学与技术}} \\
+    行政班级 & \underline{\makebox[5.2cm][c]{计科 23-2 班}} \\
+    学\qquad 号 & \underline{\makebox[5.2cm][c]{230809215}} \\
+    指导教师 & \underline{\makebox[5.2cm][c]{段雪丽}} \\
+    日\qquad 期 & \underline{\makebox[5.2cm][c]{2027 年 4 月}} \\
+  \end{tabular}\par}
+
+  \vfill
+\end{titlepage}
+
+% ==================== 诚信承诺 ====================
+\clearpage
+\thispagestyle{empty}
+\begin{center}
+  {\heiti\zihao{2} 诚信承诺\par}
+\end{center}
+\vspace{1.2cm}
+
+{\zihao{-4}\songti
+\setlength{\parindent}{2em}
+本人 \underline{\makebox[2.6cm][c]{\kaishu 刘\quad 奇}} 声明，本论文及其研究工作是由本人在导师指导下独立完成，论文所利用的一切资料均符合论文著作要求，且在参考文献中列出。\par
+\vspace{0.8cm}
+本人充分认识到学位论文造假、抄袭、代写等学术不端行为的严重后果，承诺对论文内容的真实性、原创性负责，愿意接受学校及教育主管部门的检查。\par
+}
+
+\vspace{3.2cm}
+\begin{flushright}
+{\zihao{-4}\songti
+签名：\raisebox{-0.25cm}{\includegraphics[width=2.8cm]{figures/signature.png}}\par
+\vspace{0.6cm}
+日期：\underline{\makebox[3.2cm][c]{2027 年 4 月}}\par
+}
+\end{flushright}
+
+% ==================== 前置部分 ====================
+\clearpage
+\pagenumbering{Roman}
+
+\chapter*{摘\quad 要}
+\markboth{摘要}{摘要}
+\phantomsection
+\addcontentsline{toc}{chapter}{摘\quad 要}
+
+{\setlength{\parindent}{2em}
+随着智慧校园建设的推进，教务管理、校园生活、实验室使用和办事流程等信息大量分散在规章制度、通知公告与办事指南中，学生检索成本高，管理人员重复答疑多，不同渠道的回答口径也不一致。通用大语言模型具备较强的自然语言理解与生成能力，但缺乏校本知识，直接回答校园问题容易产生事实性错误，且难以说明答案来源。针对上述问题，本文设计并实现了一个基于大模型的校园智能问答系统。系统以学校公开资料为知识源，采用 Vue 3 与 FastAPI 构建前后端分离的 Web 应用，使用 MySQL 保存业务数据，使用向量数据库保存知识片段索引；在数据处理阶段完成文档解析、清洗、结构感知分块与向量化，在问答阶段采用 BM25 与稠密向量双路召回、倒数排序融合和交叉编码器重排，并将检索到的证据与问题一并送入大模型，通过提示词约束生成带引用编号的回答，证据不足时执行拒答。系统还包括用户与权限管理、资料管理、问答历史、满意度反馈和管理统计等功能。本文完成了系统的需求分析、总体设计、关键模块实现方案与测试方案设计，给出了检索、生成、引用溯源和权限控制的具体实现思路，并设计了纯大模型问答与不同检索策略的对照实验，为后续系统联调和效果验证提供了可复现的依据。\par
+}
+
+\vspace{0.8cm}
+{\zihao{-4}\songti
+\noindent\textbf{研究方向：}教育信息化；检索增强生成\par
+\noindent\textbf{关键词：}知识库；混合检索；重排序；引用溯源；受约束生成\par
+}
+
+\clearpage
+\chapter*{Abstract}
+\markboth{Abstract}{Abstract}
+\phantomsection
+\addcontentsline{toc}{chapter}{Abstract}
+\begingroup
+\rmfamily
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{6pt}
+With the advancement of smart campus construction, information about academic affairs, campus life, laboratory use, and administrative procedures is scattered across regulations, notices, and service guides. Students spend considerable time searching for answers, and different channels sometimes provide inconsistent information. Generic large language models lack institution-specific knowledge; when asked campus-related questions, they may produce plausible but incorrect answers and usually cannot indicate the source. To address these problems, this thesis designs and implements a campus intelligent question answering system based on a large language model. The system uses publicly available campus documents as its knowledge source and adopts a front-end and back-end separated architecture built with Vue 3 and FastAPI. MySQL stores business data, and a vector database stores knowledge chunk indexes. Documents are parsed, cleaned, split in a structure-aware manner, and vectorized. For question answering, BM25 and dense vector retrieval are combined, reciprocal rank fusion merges the candidates, and a cross-encoder reranks the results. The question and retrieved evidence are sent to the large language model, and prompt constraints require the answer to cite the evidence; when evidence is insufficient, the system refuses to answer. The system also provides user and permission management, document management, question answering history, satisfaction feedback, and administrative statistics. This thesis completes requirement analysis, overall design, key module implementation scheme, and test plan design, and designs a comparative experiment between direct large-model answering and different retrieval strategies, providing a reproducible basis for subsequent integration and evaluation.
+\endgroup
+
+\vspace{0.8cm}
+{\zihao{-4}\rmfamily
+\noindent\textbf{Research Area:} Education Informatization; Retrieval-Augmented Generation\par
+\noindent\textbf{Key Words:} Knowledge Base; Hybrid Retrieval; Reranking; Citation Tracing; Constrained Generation\par
+}
+
+\clearpage
+\markboth{目录}{目录}
+\begingroup
+\linespread{1.05}\selectfont
+\tableofcontents
+\endgroup
+
+% ==================== 正文 ====================
+\clearpage
+\pagenumbering{arabic}
+\input{chapters/ch1}
+\input{chapters/ch2}
+\input{chapters/ch3}
+\input{chapters/ch4}
+\input{chapters/ch5}
+\input{chapters/ch6}
+\input{chapters/conclusion}
+\input{chapters/references}
+\input{chapters/acknowledgements}
+
+\end{document}
